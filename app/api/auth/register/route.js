@@ -40,13 +40,13 @@ export async function POST(request) {
       return NextResponse.json({ error: "passwordHash must be a 64-char hex SHA-256 string" }, { status: 400 });
 
     // ── Insert ───────────────────────────────────────────────
-    const result = await sql`
+    const rows = await sql`
       INSERT INTO user_profile (user_id, username, password_hash, level, monthly_score)
       VALUES (${userId}::uuid, ${username.toLowerCase()}, ${passwordHash}, ${level}, ${monthlyScore})
       RETURNING user_id, username, level, monthly_score, created_at
     `;
 
-    const user = result.rows[0];
+    const user = rows[0];
 
     return NextResponse.json(
       {
