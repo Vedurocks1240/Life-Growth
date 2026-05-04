@@ -55,7 +55,7 @@ export async function POST(request) {
     const userCheck = await sql`
       SELECT user_id FROM user_profile WHERE user_id = ${userId}::uuid LIMIT 1
     `;
-    if (userCheck.rows.length === 0)
+    if (userCheck.length === 0)
       return NextResponse.json({ error: "User not found" }, { status: 404 });
 
     // ── Upsert daily stats ───────────────────────────────────
@@ -140,8 +140,8 @@ export async function GET(request) {
 
     return NextResponse.json(
       {
-        stats    : stats.rows.reverse(),   // chronological order
-        appUsage : appUsage.rows,
+        stats    : stats.reverse(),
+        appUsage : appUsage,
       },
       { status: 200 }
     );
