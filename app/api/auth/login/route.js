@@ -33,19 +33,18 @@ export async function POST(request) {
       return NextResponse.json({ error: "passwordHash must be a 64-char hex string" }, { status: 400 });
 
     // ── Lookup user ──────────────────────────────────────────
-    const result = await sql`
+    const rows = await sql`
       SELECT user_id, username, password_hash, level, monthly_score, is_logged_in, created_at
       FROM user_profile
       WHERE username = ${username.toLowerCase()}
       LIMIT 1
     `;
 
-    if (result.rows.length === 0) {
-      // Return generic message to avoid username enumeration
+    if (rows.length === 0) {
       return NextResponse.json({ error: "Invalid credentials" }, { status: 401 });
     }
 
-    const user = result.rows[0];
+    const user = rows[0];
 
     // ── Constant-time hash comparison ────────────────────────
     if (!verifyHash(passwordHash, user.password_hash)) {
