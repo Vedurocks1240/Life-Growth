@@ -37,7 +37,7 @@ export async function POST(request) {
       return NextResponse.json({ error: "monthlyScore must be a number between 0 and 10" }, { status: 400 });
 
     // ── Update ───────────────────────────────────────────────
-    const result = await sql`
+    const rows = await sql`
       UPDATE user_profile SET
         level         = COALESCE(${level ?? null},        level),
         monthly_score = COALESCE(${monthlyScore ?? null}, monthly_score),
@@ -46,10 +46,10 @@ export async function POST(request) {
       RETURNING user_id, username, level, monthly_score, is_logged_in, updated_at
     `;
 
-    if (result.rows.length === 0)
+    if (rows.length === 0)
       return NextResponse.json({ error: "User not found" }, { status: 404 });
 
-    const user = result.rows[0];
+    const user = rows[0];
 
     return NextResponse.json(
       {
@@ -79,17 +79,17 @@ export async function GET(request) {
     if (!userId || !UUID_RE.test(userId))
       return NextResponse.json({ error: "Invalid or missing userId" }, { status: 400 });
 
-    const result = await sql`
+    const rows = await sql`
       SELECT user_id, username, level, monthly_score, is_logged_in, created_at, updated_at
       FROM user_profile
       WHERE user_id = ${userId}::uuid
       LIMIT 1
     `;
 
-    if (result.rows.length === 0)
+    if (rows.length === 0)
       return NextResponse.json({ error: "User not found" }, { status: 404 });
 
-    const user = result.rows[0];
+    const user = rows[0];
 
     return NextResponse.json(
       {
