@@ -1,3 +1,5 @@
+export const runtime = "nodejs";
+
 // app/api/auth/register/route.js
 // ─────────────────────────────────────────────────────────────
 // POST /api/auth/register
