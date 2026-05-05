@@ -1,34 +1,16 @@
 export const runtime = "nodejs";
 
-// app/api/sync/profile/route.js
-// ─────────────────────────────────────────────────────────────
-// POST /api/sync/profile
-//
-// Body:
-// {
-//   userId       : "uuid",
-//   level        : 12,
-//   monthlyScore : 7.4,
-//   isLoggedIn   : true        ← optional
-// }
-//
-// Returns:
-//   200  updated UserProfileEntity
-//   400  validation error
-//   404  user not found
-//   500  server error
-// ─────────────────────────────────────────────────────────────
 import { NextResponse } from "next/server";
-import { sql } from "@/lib/db";
+import { getSql } from "@/lib/db";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export async function POST(request) {
   try {
+    const sql = getSql();
     const body = await request.json();
     const { userId, level, monthlyScore, isLoggedIn } = body;
 
-    // ── Validation ──────────────────────────────────────────
     if (!userId || !UUID_RE.test(userId))
       return NextResponse.json({ error: "Invalid or missing userId" }, { status: 400 });
 
@@ -36,14 +18,13 @@ export async function POST(request) {
       return NextResponse.json({ error: "level must be a positive integer" }, { status: 400 });
 
     if (monthlyScore !== undefined && (typeof monthlyScore !== "number" || monthlyScore < 0 || monthlyScore > 10))
-      return NextResponse.json({ error: "monthlyScore must be a number between 0 and 10" }, { status: 400 });
+      return NextResponse.json({ error: "monthlyScore must be 0-10" }, { status: 400 });
 
-    // ── Update ───────────────────────────────────────────────
     const rows = await sql`
       UPDATE user_profile SET
-        level         = COALESCE(${level ?? null},        level),
+        level         = COALESCE(${level        ?? null}, level),
         monthly_score = COALESCE(${monthlyScore ?? null}, monthly_score),
-        is_logged_in  = COALESCE(${isLoggedIn ?? null},   is_logged_in)
+        is_logged_in  = COALESCE(${isLoggedIn   ?? null}, is_logged_in)
       WHERE user_id = ${userId}::uuid
       RETURNING user_id, username, level, monthly_score, is_logged_in, updated_at
     `;
@@ -53,28 +34,25 @@ export async function POST(request) {
 
     const user = rows[0];
 
-    return NextResponse.json(
-      {
-        success      : true,
-        userId       : user.user_id,
-        username     : user.username,
-        level        : user.level,
-        monthlyScore : parseFloat(user.monthly_score),
-        isLoggedIn   : user.is_logged_in,
-        updatedAt    : user.updated_at,
-      },
-      { status: 200 }
-    );
+    return NextResponse.json({
+      success      : true,
+      userId       : user.user_id,
+      username     : user.username,
+      level        : user.level,
+      monthlyScore : parseFloat(user.monthly_score),
+      isLoggedIn   : user.is_logged_in,
+      updatedAt    : user.updated_at,
+    }, { status: 200 });
 
   } catch (err) {
-    console.error("[sync/profile]", err);
+    console.error("[sync/profile POST]", err);
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }
 }
 
-// ── GET — fetch profile by userId ────────────────────────────
 export async function GET(request) {
   try {
+    const sql = getSql();
     const { searchParams } = new URL(request.url);
     const userId = searchParams.get("userId");
 
@@ -93,18 +71,15 @@ export async function GET(request) {
 
     const user = rows[0];
 
-    return NextResponse.json(
-      {
-        userId       : user.user_id,
-        username     : user.username,
-        level        : user.level,
-        monthlyScore : parseFloat(user.monthly_score),
-        isLoggedIn   : user.is_logged_in,
-        createdAt    : user.created_at,
-        updatedAt    : user.updated_at,
-      },
-      { status: 200 }
-    );
+    return NextResponse.json({
+      userId       : user.user_id,
+      username     : user.username,
+      level        : user.level,
+      monthlyScore : parseFloat(user.monthly_score),
+      isLoggedIn   : user.is_logged_in,
+      createdAt    : user.created_at,
+      updatedAt    : user.updated_at,
+    }, { status: 200 });
 
   } catch (err) {
     console.error("[sync/profile GET]", err);
