@@ -1,3 +1,5 @@
+export const runtime = "nodejs";
+
 // app/api/sync/profile/route.js
 // ─────────────────────────────────────────────────────────────
 // POST /api/sync/profile
