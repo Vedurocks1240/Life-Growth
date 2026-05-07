@@ -12,7 +12,8 @@ export async function POST(request) {
     const body = await request.json();
     const { username, passwordHash } = body;
 
-    if (!username || typeof username !== "string")
+    username = username.replace(/\s+/g, "").toLowerCase();
+    if (!username)
       return NextResponse.json({ error: "username is required" }, { status: 400 });
 
     if (!passwordHash || !HASH_RE.test(passwordHash))
@@ -21,7 +22,7 @@ export async function POST(request) {
     const rows = await sql`
       SELECT user_id, username, password_hash, level, monthly_score, is_logged_in, created_at
       FROM user_profile
-      WHERE username = ${username.toLowerCase()}
+      WHERE username = ${username}
       LIMIT 1
     `;
 
