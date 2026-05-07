@@ -86,20 +86,31 @@ function exportHTML(stats, appUsage, profile) {
   dl(new Blob([`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Life Growth Log</title><style>*{box-sizing:border-box;margin:0;padding:0}body{background:#000;color:#fff;font-family:monospace;padding:2rem}h1{color:#FF5722;margin-bottom:.2rem}.meta{color:#555;font-size:.75rem;margin-bottom:2rem}h2{color:#666;font-size:.7rem;letter-spacing:.12em;margin:1.5rem 0 .6rem}table{width:100%;border-collapse:collapse;font-size:.8rem}th{text-align:left;color:#444;border-bottom:1px solid #1a1a1a;padding:.5rem .75rem;font-size:.7rem;letter-spacing:.08em}td{padding:.55rem .75rem;border-bottom:1px solid #111;color:#aaa}</style></head><body><h1>Life Growth — Activity Log</h1><p class="meta">@${profile?.username} · Level ${profile?.level} · Exported ${new Date().toLocaleString()}</p><h2>DAILY STATS</h2><table><thead><tr><th>DATE</th><th>SCREEN TIME</th><th>UNLOCKS</th><th>IDLEWORTH</th><th>AI INSIGHT</th></tr></thead><tbody>${sr}</tbody></table><h2>APP USAGE</h2><table><thead><tr><th>CATEGORY</th><th>USAGE</th></tr></thead><tbody>${ar}</tbody></table></body></html>`],{type:"text/html"}),"life-growth-report.html");
 }
 
-// ── AI Chat ───────────────────────────────────────────────────────────────────
-async function askAI(messages) {
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
+// ── AI Chat — Sarvam streaming ────────────────────────────────────────────────
+async function askAISarvam(messages, model, onChunk) {
+  const res = await fetch("/api/ai", {
     method:"POST",
     headers:{"Content-Type":"application/json"},
-    body: JSON.stringify({
-      model:"claude-sonnet-4-20250514",
-      max_tokens:1000,
-      system:`You are the Life Growth AI coach. You analyze digital discipline data and give concise, motivating advice. You have access to the user's IdleWorth scores, screen time, and unlock patterns. Be direct, encouraging, and specific. Keep responses under 150 words.`,
-      messages,
-    }),
+    body: JSON.stringify({ messages, model }),
   });
-  const d = await res.json();
-  return d.content?.[0]?.text || "Unable to get response.";
+  if (!res.ok) throw new Error("AI API error");
+  const reader = res.body.getReader();
+  const dec = new TextDecoder();
+  let buf = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, { stream:true });
+    const lines = buf.split("\n");
+    buf = lines.pop();
+    for (const line of lines) {
+      const t = line.trim();
+      if (!t.startsWith("data: ")) continue;
+      const d = t.slice(6);
+      if (d === "[DONE]") return;
+      try { const c = JSON.parse(d); if (c.text) onChunk(c.text); } catch {}
+    }
+  }
 }
 
 // ── TABS config ───────────────────────────────────────────────────────────────
@@ -187,16 +198,32 @@ export default function App() {
   useEffect(() => { if (tab==="leaderboard"&&profile) fetchLeaderboard(); }, [tab]);
 
   // ── AI Chat ────────────────────────────────────────────────────────────────
+  const [aiModel, setAiModel] = useState("SARVAM-M");
+
   async function sendAI() {
     if (!aiInput.trim()||aiLoading) return;
-    const context = `User stats: Score today=${currentScore}, Screen time=${today.screenTimeMinutes}min, Unlocks=${today.unlockCount}, Level=${profile?.level}, Monthly avg=${profile?.monthlyScore}. `;
-    const userMsg = {role:"user",content:context+aiInput.trim()};
+    const context = `[User stats] IdleWorth today: ${currentScore}, Screen time: ${today.screenTimeMinutes}min, Unlocks: ${today.unlockCount}, Level: ${profile?.level}, Monthly avg: ${profile?.monthlyScore}. `;
+    const userMsg = {role:"user", content: context + aiInput.trim()};
     const newMsgs = [...aiMessages, userMsg];
-    setAiMessages(newMsgs); setAiInput(""); setAiLoading(true);
+    setAiMessages([...newMsgs, {role:"assistant", content:""}]);
+    setAiInput(""); setAiLoading(true);
     try {
-      const reply = await askAI(newMsgs);
-      setAiMessages(m=>[...m,{role:"assistant",content:reply}]);
-    } catch { setAiMessages(m=>[...m,{role:"assistant",content:"Connection error. Try again."}]); }
+      let full = "";
+      await askAISarvam(newMsgs, aiModel, (chunk) => {
+        full += chunk;
+        setAiMessages(m => {
+          const updated = [...m];
+          updated[updated.length-1] = {role:"assistant", content: full};
+          return updated;
+        });
+      });
+    } catch {
+      setAiMessages(m => {
+        const updated = [...m];
+        updated[updated.length-1] = {role:"assistant", content:"Connection error. Try again."};
+        return updated;
+      });
+    }
     finally { setAiLoading(false); }
   }
 
@@ -575,19 +602,59 @@ export default function App() {
   // ── Tab: AI CHAT ───────────────────────────────────────────────────────────
   function TabAI() {
     const prompts = ["How can I improve my score?","Why is my unlock count high?","Give me a 7-day plan","Analyze my screen time patterns"];
+    const MODELS = [
+      { id:"SARVAM-M",   label:"Sarvam M",   desc:"Fast · Multilingual" },
+      { id:"sarvam-105b",label:"Sarvam 105B", desc:"Powerful · Deep reasoning" },
+    ];
     return (
       <div style={{display:"flex",flexDirection:"column",gap:12}}>
-        <div style={{...card,padding:20,minHeight:380,display:"flex",flexDirection:"column"}}>
-          <CardLabel icon={MessageSquare} text="AI DISCIPLINE COACH"/>
-          <div style={{flex:1,overflowY:"auto",display:"flex",flexDirection:"column",gap:12,marginBottom:16,minHeight:260,maxHeight:400}}>
+
+        {/* Model selector */}
+        <div style={{display:"flex",gap:8}}>
+          {MODELS.map(m=>(
+            <button key={m.id} onClick={()=>setAiModel(m.id)}
+              style={{flex:1,padding:"12px 16px",borderRadius:12,cursor:"pointer",textAlign:"left",
+                background:aiModel===m.id?"rgba(255,87,34,0.12)":"#0a0a0a",
+                border:`0.5px solid ${aiModel===m.id?"rgba(255,87,34,0.4)":"rgba(255,255,255,0.07)"}`,
+                transition:"all 0.2s"}}>
+              <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:3}}>
+                <div style={{width:8,height:8,borderRadius:"50%",background:aiModel===m.id?orange:"#333",transition:"background 0.2s"}}/>
+                <span style={{...mono,fontSize:12,fontWeight:600,color:aiModel===m.id?orange:"#888"}}>{m.label}</span>
+              </div>
+              <span style={{...mono,fontSize:10,color:"#444",paddingLeft:16}}>{m.desc}</span>
+            </button>
+          ))}
+        </div>
+
+        {/* Chat window */}
+        <div style={{...card,padding:20,display:"flex",flexDirection:"column"}}>
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14}}>
+            <div style={{display:"flex",alignItems:"center",gap:8}}>
+              <MessageSquare size={13} color={orange}/>
+              <span style={{...mono,fontSize:10,letterSpacing:"0.1em",color:"#555"}}>AI DISCIPLINE COACH</span>
+            </div>
+            <div style={{display:"flex",alignItems:"center",gap:6}}>
+              <div style={{width:6,height:6,borderRadius:"50%",background:aiLoading?"#FF9800":orange,
+                animation:aiLoading?"pulse 1s ease-in-out infinite":"none"}}/>
+              <span style={{...mono,fontSize:10,color:"#444"}}>{aiLoading?"thinking...":aiModel}</span>
+            </div>
+          </div>
+
+          <div style={{overflowY:"auto",display:"flex",flexDirection:"column",gap:12,marginBottom:16,minHeight:280,maxHeight:420}}>
             {aiMessages.length===0&&(
-              <div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",flex:1,gap:16,padding:"20px 0"}}>
-                <div style={{width:48,height:48,borderRadius:14,overflow:"hidden"}}><img src="/iw-icon.png" alt="AI" width={48} height={48} style={{objectFit:"cover"}}/></div>
-                <p style={{...mono,fontSize:11,color:"#555",textAlign:"center"}}>Ask me anything about your discipline habits</p>
-                <div style={{display:"flex",flexWrap:"wrap",gap:8,justifyContent:"center"}}>
+              <div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",flex:1,gap:16,padding:"30px 0"}}>
+                <div style={{width:52,height:52,borderRadius:15,overflow:"hidden",border:"0.5px solid rgba(255,87,34,0.3)"}}><img src="/iw-icon.png" alt="AI" width={52} height={52} style={{objectFit:"cover"}}/></div>
+                <div style={{textAlign:"center"}}>
+                  <p style={{fontSize:14,fontWeight:600,color:"#888",marginBottom:6}}>Life Growth Coach</p>
+                  <p style={{...mono,fontSize:11,color:"#444"}}>Powered by {aiModel}</p>
+                </div>
+                <div style={{display:"flex",flexWrap:"wrap",gap:8,justifyContent:"center",maxWidth:400}}>
                   {prompts.map(p=>(
-                    <button key={p} onClick={()=>setAiInput(p)} style={{padding:"6px 14px",background:"none",
-                      border:"0.5px solid rgba(255,255,255,0.1)",borderRadius:100,...mono,fontSize:11,color:"#666",cursor:"pointer"}}>
+                    <button key={p} onClick={()=>setAiInput(p)} style={{padding:"7px 14px",background:"none",
+                      border:"0.5px solid rgba(255,255,255,0.1)",borderRadius:100,...mono,fontSize:11,color:"#666",cursor:"pointer",
+                      transition:"all 0.2s"}}
+                      onMouseEnter={e=>{e.currentTarget.style.borderColor="rgba(255,87,34,0.3)";e.currentTarget.style.color=orange}}
+                      onMouseLeave={e=>{e.currentTarget.style.borderColor="rgba(255,255,255,0.1)";e.currentTarget.style.color="#666"}}>
                       {p}
                     </button>
                   ))}
@@ -595,38 +662,51 @@ export default function App() {
               </div>
             )}
             {aiMessages.map((m,i)=>(
-              <div key={i} style={{display:"flex",gap:10,justifyContent:m.role==="user"?"flex-end":"flex-start"}}>
-                {m.role==="assistant"&&<div style={{width:28,height:28,borderRadius:8,overflow:"hidden",flexShrink:0}}><img src="/iw-icon.png" alt="AI" width={28} height={28} style={{objectFit:"cover"}}/></div>}
-                <div style={{maxWidth:"80%",padding:"10px 14px",borderRadius:12,fontSize:13,lineHeight:1.55,
-                  background:m.role==="user"?orange:"#141414",color:m.role==="user"?"#fff":"#ccc",
+              <div key={i} style={{display:"flex",gap:10,justifyContent:m.role==="user"?"flex-end":"flex-start",alignItems:"flex-end"}}>
+                {m.role==="assistant"&&(
+                  <div style={{width:26,height:26,borderRadius:8,overflow:"hidden",flexShrink:0,border:"0.5px solid rgba(255,87,34,0.2)"}}>
+                    <img src="/iw-icon.png" alt="AI" width={26} height={26} style={{objectFit:"cover"}}/>
+                  </div>
+                )}
+                <div style={{maxWidth:"78%",padding:"11px 15px",borderRadius:m.role==="user"?"14px 14px 4px 14px":"14px 14px 14px 4px",
+                  fontSize:13,lineHeight:1.6,
+                  background:m.role==="user"?orange:"#141414",
+                  color:m.role==="user"?"#fff":"#ccc",
                   border:m.role==="assistant"?"0.5px solid rgba(255,255,255,0.07)":"none"}}>
-                  {m.content}
+                  {m.content || (m.role==="assistant" && aiLoading && i===aiMessages.length-1
+                    ? <span style={{display:"inline-flex",gap:4}}>
+                        {[0,1,2].map(d=><span key={d} style={{width:6,height:6,borderRadius:"50%",background:"#555",
+                          display:"inline-block",animation:`bounce 1.2s ${d*0.2}s ease-in-out infinite`}}/>)}
+                      </span>
+                    : "")}
                 </div>
+                {m.role==="user"&&<div style={{width:26,height:26,borderRadius:"50%",background:"rgba(255,87,34,0.2)",
+                  border:"0.5px solid rgba(255,87,34,0.3)",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
+                  <User size={13} color={orange}/>
+                </div>}
               </div>
             ))}
-            {aiLoading&&(
-              <div style={{display:"flex",gap:10}}>
-                <div style={{width:28,height:28,borderRadius:8,overflow:"hidden"}}><img src="/iw-icon.png" alt="AI" width={28} height={28} style={{objectFit:"cover"}}/></div>
-                <div style={{padding:"12px 16px",background:"#141414",borderRadius:12,border:"0.5px solid rgba(255,255,255,0.07)"}}>
-                  <Loader2 size={14} color={orange} style={{animation:"spin 1s linear infinite"}}/>
-                </div>
-              </div>
-            )}
             <div ref={chatEndRef}/>
           </div>
-          <div style={{display:"flex",gap:8}}>
+
+          <div style={{display:"flex",gap:8,alignItems:"center"}}>
             <input value={aiInput} onChange={e=>setAiInput(e.target.value)}
-              onKeyDown={e=>e.key==="Enter"&&sendAI()} placeholder="Ask your AI coach..."
-              style={{flex:1,background:"#111",border:"0.5px solid rgba(255,255,255,0.1)",borderRadius:10,
-                padding:"12px 16px",...mono,fontSize:13,color:"#fff",outline:"none"}}/>
+              onKeyDown={e=>e.key==="Enter"&&!e.shiftKey&&sendAI()} placeholder={`Ask ${aiModel}...`}
+              style={{flex:1,background:"#111",border:"0.5px solid rgba(255,255,255,0.1)",borderRadius:12,
+                padding:"13px 16px",...mono,fontSize:13,color:"#fff",outline:"none"}}/>
             <button onClick={sendAI} disabled={aiLoading||!aiInput.trim()}
-              style={{padding:"12px 16px",background:aiInput.trim()&&!aiLoading?orange:"#1a1a1a",color:"#fff",
-                border:"none",borderRadius:10,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}>
-              <Send size={15}/>
+              style={{width:46,height:46,background:aiInput.trim()&&!aiLoading?orange:"#1a1a1a",color:"#fff",
+                border:"none",borderRadius:12,cursor:aiInput.trim()&&!aiLoading?"pointer":"default",
+                display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,transition:"background 0.2s"}}>
+              {aiLoading?<Loader2 size={16} style={{animation:"spin 1s linear infinite"}}/>:<Send size={15}/>}
             </button>
           </div>
         </div>
-        <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
+        <style>{`
+          @keyframes spin{to{transform:rotate(360deg)}}
+          @keyframes bounce{0%,100%{transform:translateY(0)}50%{transform:translateY(-4px)}}
+          @keyframes pulse{0%,100%{opacity:1}50%{opacity:0.3}}
+        `}</style>
       </div>
     );
   }
