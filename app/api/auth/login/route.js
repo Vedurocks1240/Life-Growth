@@ -10,9 +10,9 @@ export async function POST(request) {
   try {
     const sql = getSql();
     const body = await request.json();
-    const { username, passwordHash } = body;
+    let username = (body.username || "").replace(/\s+/g, "").toLowerCase();
+    const { passwordHash } = body;
 
-    username = username.replace(/\s+/g, "").toLowerCase();
     if (!username)
       return NextResponse.json({ error: "username is required" }, { status: 400 });
 
