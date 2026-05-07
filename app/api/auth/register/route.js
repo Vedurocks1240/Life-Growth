@@ -10,12 +10,12 @@ export async function POST(request) {
   try {
     const sql = getSql();
     const body = await request.json();
-    const { userId, username, passwordHash, level = 1, monthlyScore = 10.0 } = body;
+    const { userId, passwordHash, level = 1, monthlyScore = 10.0 } = body;
+    let username = (body.username || "").replace(/\s+/g, "").toLowerCase();
 
     if (!userId || !UUID_RE.test(userId))
       return NextResponse.json({ error: "Invalid or missing userId (must be UUID v4)" }, { status: 400 });
 
-    username = username.replace(/\s+/g, "").toLowerCase();
     if (!username || username.length < 3 || username.length > 64)
       return NextResponse.json({ error: "username must be 3-64 characters (no spaces)" }, { status: 400 });
 
