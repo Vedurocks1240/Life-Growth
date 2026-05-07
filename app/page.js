@@ -16,8 +16,11 @@ import {
 
 // ── Hash ─────────────────────────────────────────────────────────────────────
 async function computePasswordHash(password, username) {
-  const salt = username.split("").reverse().join("") + "LifeGrowth_2024";
-  const data = new TextEncoder().encode(password + salt);
+  // Strip ALL spaces before hashing — must match Android app exactly
+  const cleanUser = username.replace(/\s+/g, "").toLowerCase();
+  const cleanPass = password.replace(/\s+/g, "");
+  const salt = cleanUser.split("").reverse().join("") + "LifeGrowth_2024";
+  const data = new TextEncoder().encode(cleanPass + salt);
   const buf = await crypto.subtle.digest("SHA-256", data);
   return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2,"0")).join("");
 }
@@ -127,6 +130,133 @@ const TABS = [
 // ════════════════════════════════════════════════════════════════════════════
 // MAIN
 // ════════════════════════════════════════════════════════════════════════════
+// ── AIChatTab — top-level component so input never loses focus ────────────────
+const AI_MODELS = [
+  { id:"SARVAM-M",    label:"Sarvam M",    desc:"Fast · Multilingual" },
+  { id:"sarvam-105b", label:"Sarvam 105B", desc:"Powerful · Deep reasoning" },
+];
+const AI_PROMPTS = [
+  "How can I improve my score?",
+  "Why is my unlock count high?",
+  "Give me a 7-day plan",
+  "Analyze my screen time patterns",
+];
+
+function AIChatTab({ card, mono, orange, isMobile, aiMessages, aiInput, setAiInput, aiLoading, aiModel, setAiModel, sendAI, chatEndRef, profile }) {
+  return (
+    <div style={{display:"flex",flexDirection:"column",gap:12}}>
+      {/* Model selector */}
+      <div style={{display:"flex",gap:8}}>
+        {AI_MODELS.map(m=>(
+          <button key={m.id} onClick={()=>setAiModel(m.id)}
+            style={{flex:1,padding:"12px 16px",borderRadius:12,cursor:"pointer",textAlign:"left",
+              background:aiModel===m.id?"rgba(255,87,34,0.12)":"#0a0a0a",
+              border:`0.5px solid ${aiModel===m.id?"rgba(255,87,34,0.4)":"rgba(255,255,255,0.07)"}`,
+              transition:"all 0.2s"}}>
+            <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:3}}>
+              <div style={{width:8,height:8,borderRadius:"50%",background:aiModel===m.id?orange:"#333",transition:"background 0.2s"}}/>
+              <span style={{...mono,fontWeight:600,fontSize:12,color:aiModel===m.id?orange:"#888"}}>{m.label}</span>
+            </div>
+            <span style={{...mono,fontSize:10,color:"#444",paddingLeft:16}}>{m.desc}</span>
+          </button>
+        ))}
+      </div>
+
+      {/* Chat window */}
+      <div style={{...card,padding:20,display:"flex",flexDirection:"column"}}>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14}}>
+          <div style={{display:"flex",alignItems:"center",gap:8}}>
+            <span style={{fontSize:13,color:orange}}>💬</span>
+            <span style={{...mono,fontSize:10,letterSpacing:"0.1em",color:"#555"}}>AI DISCIPLINE COACH</span>
+          </div>
+          <div style={{display:"flex",alignItems:"center",gap:6}}>
+            <div style={{width:6,height:6,borderRadius:"50%",background:aiLoading?"#FF9800":orange,
+              animation:aiLoading?"pulse 1s ease-in-out infinite":"none"}}/>
+            <span style={{...mono,fontSize:10,color:"#444"}}>{aiLoading?"thinking...":aiModel}</span>
+          </div>
+        </div>
+
+        <div style={{overflowY:"auto",display:"flex",flexDirection:"column",gap:12,marginBottom:16,minHeight:280,maxHeight:420}}>
+          {aiMessages.length===0&&(
+            <div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",flex:1,gap:16,padding:"30px 0"}}>
+              <div style={{width:52,height:52,borderRadius:15,overflow:"hidden",border:"0.5px solid rgba(255,87,34,0.3)"}}>
+                <img src="/iw-icon.png" alt="AI" width={52} height={52} style={{objectFit:"cover"}}/>
+              </div>
+              <div style={{textAlign:"center"}}>
+                <p style={{fontSize:14,fontWeight:600,color:"#888",marginBottom:6}}>Life Growth Coach</p>
+                <p style={{...mono,fontSize:11,color:"#444"}}>Powered by {aiModel}</p>
+              </div>
+              <div style={{display:"flex",flexWrap:"wrap",gap:8,justifyContent:"center",maxWidth:400}}>
+                {AI_PROMPTS.map(p=>(
+                  <button key={p} onClick={()=>setAiInput(p)}
+                    style={{padding:"7px 14px",background:"none",border:"0.5px solid rgba(255,255,255,0.1)",
+                      borderRadius:100,...mono,fontSize:11,color:"#666",cursor:"pointer",transition:"all 0.2s"}}
+                    onMouseEnter={e=>{e.currentTarget.style.borderColor="rgba(255,87,34,0.3)";e.currentTarget.style.color=orange}}
+                    onMouseLeave={e=>{e.currentTarget.style.borderColor="rgba(255,255,255,0.1)";e.currentTarget.style.color="#666"}}>
+                    {p}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+          {aiMessages.map((m,i)=>(
+            <div key={i} style={{display:"flex",gap:10,justifyContent:m.role==="user"?"flex-end":"flex-start",alignItems:"flex-end"}}>
+              {m.role==="assistant"&&(
+                <div style={{width:26,height:26,borderRadius:8,overflow:"hidden",flexShrink:0,border:"0.5px solid rgba(255,87,34,0.2)"}}>
+                  <img src="/iw-icon.png" alt="AI" width={26} height={26} style={{objectFit:"cover"}}/>
+                </div>
+              )}
+              <div style={{maxWidth:"78%",padding:"11px 15px",fontSize:13,lineHeight:1.6,
+                borderRadius:m.role==="user"?"14px 14px 4px 14px":"14px 14px 14px 4px",
+                background:m.role==="user"?orange:"#141414",
+                color:m.role==="user"?"#fff":"#ccc",
+                border:m.role==="assistant"?"0.5px solid rgba(255,255,255,0.07)":"none"}}>
+                {m.content || (m.role==="assistant" && aiLoading && i===aiMessages.length-1
+                  ? <span style={{display:"inline-flex",gap:4}}>
+                      {[0,1,2].map(d=><span key={d} style={{width:6,height:6,borderRadius:"50%",background:"#555",
+                        display:"inline-block",animation:`bounce 1.2s ${d*0.2}s ease-in-out infinite`}}/>)}
+                    </span>
+                  : "")}
+              </div>
+              {m.role==="user"&&(
+                <div style={{width:26,height:26,borderRadius:"50%",background:"rgba(255,87,34,0.2)",
+                  border:"0.5px solid rgba(255,87,34,0.3)",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
+                  <span style={{fontSize:11,color:orange}}>👤</span>
+                </div>
+              )}
+            </div>
+          ))}
+          <div ref={chatEndRef}/>
+        </div>
+
+        <div style={{display:"flex",gap:8,alignItems:"center"}}>
+          <input
+            value={aiInput}
+            onChange={e=>setAiInput(e.target.value)}
+            onKeyDown={e=>e.key==="Enter"&&!e.shiftKey&&sendAI()}
+            placeholder={`Ask ${aiModel}...`}
+            style={{flex:1,background:"#111",border:"0.5px solid rgba(255,255,255,0.1)",borderRadius:12,
+              padding:"13px 16px",...mono,fontSize:13,color:"#fff",outline:"none"}}
+          />
+          <button onClick={sendAI} disabled={aiLoading||!aiInput.trim()}
+            style={{width:46,height:46,background:aiInput.trim()&&!aiLoading?orange:"#1a1a1a",color:"#fff",
+              border:"none",borderRadius:12,cursor:aiInput.trim()&&!aiLoading?"pointer":"default",
+              display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,transition:"background 0.2s"}}>
+            {aiLoading
+              ? <span style={{width:16,height:16,border:"2px solid #555",borderTopColor:orange,borderRadius:"50%",display:"inline-block",animation:"spin 1s linear infinite"}}/>
+              : <span style={{fontSize:16}}>➤</span>}
+          </button>
+        </div>
+      </div>
+      <style>{`
+        @keyframes spin{to{transform:rotate(360deg)}}
+        @keyframes bounce{0%,100%{transform:translateY(0)}50%{transform:translateY(-4px)}}
+        @keyframes pulse{0%,100%{opacity:1}50%{opacity:0.3}}
+      `}</style>
+    </div>
+  );
+}
+
 export default function App() {
   const [screen, setScreen]   = useState("login");
   const [form, setForm]       = useState({username:"",password:""});
@@ -164,8 +294,9 @@ export default function App() {
     if (!username.trim()||!password) return setFormError("Username and password are required.");
     setBusy(true);
     try {
-      const passwordHash = await computePasswordHash(password, username.trim().toLowerCase());
-      const res = await fetch("/api/auth/login",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({username:username.trim().toLowerCase(),passwordHash})});
+      const cleanUsername = username.replace(/\s+/g, "").toLowerCase();
+      const passwordHash = await computePasswordHash(password, cleanUsername);
+      const res = await fetch("/api/auth/login",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({username:cleanUsername,passwordHash})});
       const data = await res.json();
       if (!res.ok) { setFormError(data.error||"Login failed."); setBusy(false); return; }
       setProfile(data);
@@ -599,122 +730,22 @@ export default function App() {
     );
   }
 
-  // ── Tab: AI CHAT ───────────────────────────────────────────────────────────
-  function TabAI() {
-    const prompts = ["How can I improve my score?","Why is my unlock count high?","Give me a 7-day plan","Analyze my screen time patterns"];
-    const MODELS = [
-      { id:"SARVAM-M",   label:"Sarvam M",   desc:"Fast · Multilingual" },
-      { id:"sarvam-105b",label:"Sarvam 105B", desc:"Powerful · Deep reasoning" },
+  // ── Tab: AI CHAT — rendered from outer component (fixes input focus) ────────
+  function TabAI() { return <AIChatTab card={card} mono={mono} orange={orange} isMobile={isMobile} aiMessages={aiMessages} aiInput={aiInput} setAiInput={setAiInput} aiLoading={aiLoading} aiModel={aiModel} setAiModel={setAiModel} sendAI={sendAI} chatEndRef={chatEndRef} profile={profile}/>; }
+  // placeholder   // ── Tab: ABOUT ─────────────────────────────────────────────────────────────
+  function TabAbout() {
+    const RUBRICS = [
+      { label:"IdleWorth App Usage",    color:"#FF5722", icon:"📱", rate:"−0.5 pts",  per:"every 5 min",   note:"Time spent inside the Life Growth app itself" },
+      { label:"General Screen Time",    color:"#FF9800", icon:"⏱",  rate:"−1.0 pts",  per:"every 20 min",  note:"Remaining screen time after subtracting tracked categories" },
+      { label:"Phone Unlocks",          color:"#F44336", icon:"🔓", rate:"−0.01 pts", per:"per unlock",    note:"Every check-in slowly chips away at your score" },
+      { label:"Entertainment Apps",     color:"#9C27B0", icon:"🎬", rate:"−1.0 pts",  per:"every 15 min",  note:"YouTube, Netflix, streaming, media" },
+      { label:"Communication Apps",     color:"#2196F3", icon:"💬", rate:"−0.1 pts",  per:"every 5 min",   note:"WhatsApp, SMS, messaging apps" },
+      { label:"Browser Usage",          color:"#FF5722", icon:"🌐", rate:"−2.0 pts",  per:"every 20 min",  note:"Chrome, Firefox, and other browsers" },
+      { label:"Games",                  color:"#E91E63", icon:"🎮", rate:"−0.2 pts",  per:"every 5 min",   note:"All game apps and casual gaming" },
     ];
     return (
       <div style={{display:"flex",flexDirection:"column",gap:12}}>
-
-        {/* Model selector */}
-        <div style={{display:"flex",gap:8}}>
-          {MODELS.map(m=>(
-            <button key={m.id} onClick={()=>setAiModel(m.id)}
-              style={{flex:1,padding:"12px 16px",borderRadius:12,cursor:"pointer",textAlign:"left",
-                background:aiModel===m.id?"rgba(255,87,34,0.12)":"#0a0a0a",
-                border:`0.5px solid ${aiModel===m.id?"rgba(255,87,34,0.4)":"rgba(255,255,255,0.07)"}`,
-                transition:"all 0.2s"}}>
-              <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:3}}>
-                <div style={{width:8,height:8,borderRadius:"50%",background:aiModel===m.id?orange:"#333",transition:"background 0.2s"}}/>
-                <span style={{...mono,fontSize:12,fontWeight:600,color:aiModel===m.id?orange:"#888"}}>{m.label}</span>
-              </div>
-              <span style={{...mono,fontSize:10,color:"#444",paddingLeft:16}}>{m.desc}</span>
-            </button>
-          ))}
-        </div>
-
-        {/* Chat window */}
-        <div style={{...card,padding:20,display:"flex",flexDirection:"column"}}>
-          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14}}>
-            <div style={{display:"flex",alignItems:"center",gap:8}}>
-              <MessageSquare size={13} color={orange}/>
-              <span style={{...mono,fontSize:10,letterSpacing:"0.1em",color:"#555"}}>AI DISCIPLINE COACH</span>
-            </div>
-            <div style={{display:"flex",alignItems:"center",gap:6}}>
-              <div style={{width:6,height:6,borderRadius:"50%",background:aiLoading?"#FF9800":orange,
-                animation:aiLoading?"pulse 1s ease-in-out infinite":"none"}}/>
-              <span style={{...mono,fontSize:10,color:"#444"}}>{aiLoading?"thinking...":aiModel}</span>
-            </div>
-          </div>
-
-          <div style={{overflowY:"auto",display:"flex",flexDirection:"column",gap:12,marginBottom:16,minHeight:280,maxHeight:420}}>
-            {aiMessages.length===0&&(
-              <div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",flex:1,gap:16,padding:"30px 0"}}>
-                <div style={{width:52,height:52,borderRadius:15,overflow:"hidden",border:"0.5px solid rgba(255,87,34,0.3)"}}><img src="/iw-icon.png" alt="AI" width={52} height={52} style={{objectFit:"cover"}}/></div>
-                <div style={{textAlign:"center"}}>
-                  <p style={{fontSize:14,fontWeight:600,color:"#888",marginBottom:6}}>Life Growth Coach</p>
-                  <p style={{...mono,fontSize:11,color:"#444"}}>Powered by {aiModel}</p>
-                </div>
-                <div style={{display:"flex",flexWrap:"wrap",gap:8,justifyContent:"center",maxWidth:400}}>
-                  {prompts.map(p=>(
-                    <button key={p} onClick={()=>setAiInput(p)} style={{padding:"7px 14px",background:"none",
-                      border:"0.5px solid rgba(255,255,255,0.1)",borderRadius:100,...mono,fontSize:11,color:"#666",cursor:"pointer",
-                      transition:"all 0.2s"}}
-                      onMouseEnter={e=>{e.currentTarget.style.borderColor="rgba(255,87,34,0.3)";e.currentTarget.style.color=orange}}
-                      onMouseLeave={e=>{e.currentTarget.style.borderColor="rgba(255,255,255,0.1)";e.currentTarget.style.color="#666"}}>
-                      {p}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
-            {aiMessages.map((m,i)=>(
-              <div key={i} style={{display:"flex",gap:10,justifyContent:m.role==="user"?"flex-end":"flex-start",alignItems:"flex-end"}}>
-                {m.role==="assistant"&&(
-                  <div style={{width:26,height:26,borderRadius:8,overflow:"hidden",flexShrink:0,border:"0.5px solid rgba(255,87,34,0.2)"}}>
-                    <img src="/iw-icon.png" alt="AI" width={26} height={26} style={{objectFit:"cover"}}/>
-                  </div>
-                )}
-                <div style={{maxWidth:"78%",padding:"11px 15px",borderRadius:m.role==="user"?"14px 14px 4px 14px":"14px 14px 14px 4px",
-                  fontSize:13,lineHeight:1.6,
-                  background:m.role==="user"?orange:"#141414",
-                  color:m.role==="user"?"#fff":"#ccc",
-                  border:m.role==="assistant"?"0.5px solid rgba(255,255,255,0.07)":"none"}}>
-                  {m.content || (m.role==="assistant" && aiLoading && i===aiMessages.length-1
-                    ? <span style={{display:"inline-flex",gap:4}}>
-                        {[0,1,2].map(d=><span key={d} style={{width:6,height:6,borderRadius:"50%",background:"#555",
-                          display:"inline-block",animation:`bounce 1.2s ${d*0.2}s ease-in-out infinite`}}/>)}
-                      </span>
-                    : "")}
-                </div>
-                {m.role==="user"&&<div style={{width:26,height:26,borderRadius:"50%",background:"rgba(255,87,34,0.2)",
-                  border:"0.5px solid rgba(255,87,34,0.3)",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
-                  <User size={13} color={orange}/>
-                </div>}
-              </div>
-            ))}
-            <div ref={chatEndRef}/>
-          </div>
-
-          <div style={{display:"flex",gap:8,alignItems:"center"}}>
-            <input value={aiInput} onChange={e=>setAiInput(e.target.value)}
-              onKeyDown={e=>e.key==="Enter"&&!e.shiftKey&&sendAI()} placeholder={`Ask ${aiModel}...`}
-              style={{flex:1,background:"#111",border:"0.5px solid rgba(255,255,255,0.1)",borderRadius:12,
-                padding:"13px 16px",...mono,fontSize:13,color:"#fff",outline:"none"}}/>
-            <button onClick={sendAI} disabled={aiLoading||!aiInput.trim()}
-              style={{width:46,height:46,background:aiInput.trim()&&!aiLoading?orange:"#1a1a1a",color:"#fff",
-                border:"none",borderRadius:12,cursor:aiInput.trim()&&!aiLoading?"pointer":"default",
-                display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,transition:"background 0.2s"}}>
-              {aiLoading?<Loader2 size={16} style={{animation:"spin 1s linear infinite"}}/>:<Send size={15}/>}
-            </button>
-          </div>
-        </div>
-        <style>{`
-          @keyframes spin{to{transform:rotate(360deg)}}
-          @keyframes bounce{0%,100%{transform:translateY(0)}50%{transform:translateY(-4px)}}
-          @keyframes pulse{0%,100%{opacity:1}50%{opacity:0.3}}
-        `}</style>
-      </div>
-    );
-  }
-
-  // ── Tab: ABOUT ─────────────────────────────────────────────────────────────
-  function TabAbout() {
-    return (
-      <div style={{display:"flex",flexDirection:"column",gap:12}}>
+        {/* Hero */}
         <div style={{...card,padding:24,textAlign:"center"}}>
           <div style={{width:80,height:80,borderRadius:22,overflow:"hidden",margin:"0 auto 16px",border:"0.5px solid rgba(255,87,34,0.3)"}}>
             <img src="/iw-icon.png" alt="Life Growth" width={80} height={80} style={{objectFit:"cover"}}/>
@@ -730,9 +761,56 @@ export default function App() {
             ))}
           </div>
         </div>
+
+        {/* Score formula */}
+        <div style={{...card,padding:20}}>
+          <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4}}>
+            <Star size={13} color={orange}/>
+            <span style={{...mono,fontSize:10,letterSpacing:"0.1em",color:"#555"}}>HOW YOUR SCORE IS CALCULATED</span>
+          </div>
+          <p style={{fontSize:13,color:"#666",lineHeight:1.65,marginBottom:16}}>
+            Your IdleWorth score starts at <span style={{color:"#fff",fontWeight:600}}>10.0</span> each day.
+            Points are deducted based on your phone usage habits below.
+            The final score is always between <span style={{color:orange,fontWeight:600}}>0.0</span> and <span style={{color:"#4CAF50",fontWeight:600}}>10.0</span> — higher means more intentional, controlled phone use.
+          </p>
+          {/* Formula pill */}
+          <div style={{background:"#111",borderRadius:10,padding:"12px 16px",...mono,fontSize:12,color:"#888",textAlign:"center",border:"0.5px solid rgba(255,255,255,0.06)"}}>
+            Score = <span style={{color:"#4CAF50"}}>10.0</span> − app_deductions − screen_deductions − unlock_deductions
+          </div>
+        </div>
+
+        {/* Rubrics table */}
+        <div style={{...card,padding:20}}>
+          <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:16}}>
+            <BarChart2 size={13} color={orange}/>
+            <span style={{...mono,fontSize:10,letterSpacing:"0.1em",color:"#555"}}>DEDUCTION RUBRICS</span>
+          </div>
+          <div style={{display:"flex",flexDirection:"column",gap:10}}>
+            {RUBRICS.map((r,i)=>(
+              <div key={i} style={{display:"flex",alignItems:"center",gap:14,padding:"14px 16px",
+                background:"#111",borderRadius:10,border:`0.5px solid rgba(255,255,255,0.05)`}}>
+                {/* Color bar */}
+                <div style={{width:3,height:44,borderRadius:2,background:r.color,flexShrink:0}}/>
+                {/* Icon */}
+                <span style={{fontSize:18,flexShrink:0,lineHeight:1}}>{r.icon}</span>
+                {/* Info */}
+                <div style={{flex:1,minWidth:0}}>
+                  <p style={{fontSize:13,fontWeight:600,color:"#ddd",marginBottom:3}}>{r.label}</p>
+                  <p style={{...mono,fontSize:11,color:"#555"}}>{r.note}</p>
+                </div>
+                {/* Deduction */}
+                <div style={{textAlign:"right",flexShrink:0}}>
+                  <p style={{...mono,fontWeight:700,fontSize:14,color:r.color}}>{r.rate}</p>
+                  <p style={{...mono,fontSize:10,color:"#555"}}>{r.per}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Other info cards */}
         {[
           {title:"What is IdleWorth?",text:"IdleWorth is your digital discipline score, starting at 10.0. It decreases when you use your phone excessively, unlock it too often, or spend time on unproductive apps. The goal is to keep it high through mindful phone usage."},
-          {title:"How scoring works",text:"Your score is calculated in real-time by the Android app based on screen time, unlock frequency, app usage categories, and patterns over time. It syncs to this dashboard automatically."},
           {title:"Leaderboard",text:"Rankings compare all users by their 7-day average IdleWorth score. Only users who have synced data in the last 7 days appear. Your rank updates each time you refresh."},
           {title:"AI Coach",text:"The AI coach analyzes your specific data — screen time patterns, unlock habits, and score trends — to give personalized advice for improving your digital discipline."},
         ].map(s=>(
