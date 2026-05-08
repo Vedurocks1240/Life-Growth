@@ -89,31 +89,21 @@ function exportHTML(stats, appUsage, profile) {
   dl(new Blob([`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Life Growth Log</title><style>*{box-sizing:border-box;margin:0;padding:0}body{background:#000;color:#fff;font-family:monospace;padding:2rem}h1{color:#FF5722;margin-bottom:.2rem}.meta{color:#555;font-size:.75rem;margin-bottom:2rem}h2{color:#666;font-size:.7rem;letter-spacing:.12em;margin:1.5rem 0 .6rem}table{width:100%;border-collapse:collapse;font-size:.8rem}th{text-align:left;color:#444;border-bottom:1px solid #1a1a1a;padding:.5rem .75rem;font-size:.7rem;letter-spacing:.08em}td{padding:.55rem .75rem;border-bottom:1px solid #111;color:#aaa}</style></head><body><h1>Life Growth — Activity Log</h1><p class="meta">@${profile?.username} · Level ${profile?.level} · Exported ${new Date().toLocaleString()}</p><h2>DAILY STATS</h2><table><thead><tr><th>DATE</th><th>SCREEN TIME</th><th>UNLOCKS</th><th>IDLEWORTH</th><th>AI INSIGHT</th></tr></thead><tbody>${sr}</tbody></table><h2>APP USAGE</h2><table><thead><tr><th>CATEGORY</th><th>USAGE</th></tr></thead><tbody>${ar}</tbody></table></body></html>`],{type:"text/html"}),"life-growth-report.html");
 }
 
-// ── AI Chat — Sarvam streaming ────────────────────────────────────────────────
-async function askAISarvam(messages, model, onChunk) {
-  const res = await fetch("/api/ai", {
-    method:"POST",
-    headers:{"Content-Type":"application/json"},
-    body: JSON.stringify({ messages, model }),
+// ── AI Chat — DB push/pull (push prompt → DB processes via Sarvam → pull response) ──
+async function pushPromptToDB(userId, sessionId, message, model, context) {
+  const res = await fetch("/api/ai/push", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ userId, sessionId, message, model, context }),
   });
-  if (!res.ok) throw new Error("AI API error");
-  const reader = res.body.getReader();
-  const dec = new TextDecoder();
-  let buf = "";
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buf += dec.decode(value, { stream:true });
-    const lines = buf.split("\n");
-    buf = lines.pop();
-    for (const line of lines) {
-      const t = line.trim();
-      if (!t.startsWith("data: ")) continue;
-      const d = t.slice(6);
-      if (d === "[DONE]") return;
-      try { const c = JSON.parse(d); if (c.text) onChunk(c.text); } catch {}
-    }
-  }
+  if (!res.ok) throw new Error("Push failed");
+  return await res.json();
+}
+
+async function pullSession(userId, sessionId) {
+  const res = await fetch(`/api/ai/pull?userId=${userId}&sessionId=${sessionId}`);
+  if (!res.ok) throw new Error("Pull failed");
+  return await res.json();
 }
 
 // ── TABS config ───────────────────────────────────────────────────────────────
@@ -142,7 +132,7 @@ const AI_PROMPTS = [
   "Analyze my screen time patterns",
 ];
 
-function AIChatTab({ card, mono, orange, isMobile, aiMessages, aiInput, setAiInput, aiLoading, aiModel, setAiModel, sendAI, chatEndRef, profile }) {
+function AIChatTab({ card, mono, orange, isMobile, aiMessages, aiInput, setAiInput, aiLoading, aiModel, setAiModel, sendAI, chatEndRef, profile, newAISession }) {
   return (
     <div style={{display:"flex",flexDirection:"column",gap:12}}>
       {/* Model selector */}
@@ -168,11 +158,26 @@ function AIChatTab({ card, mono, orange, isMobile, aiMessages, aiInput, setAiInp
           <div style={{display:"flex",alignItems:"center",gap:8}}>
             <span style={{fontSize:13,color:orange}}>💬</span>
             <span style={{...mono,fontSize:10,letterSpacing:"0.1em",color:"#555"}}>AI DISCIPLINE COACH</span>
+            <span style={{...mono,fontSize:9,padding:"2px 8px",borderRadius:100,
+              background:"rgba(255,87,34,0.1)",color:"#555",border:"0.5px solid rgba(255,87,34,0.2)"}}>
+              DB-BACKED
+            </span>
           </div>
-          <div style={{display:"flex",alignItems:"center",gap:6}}>
-            <div style={{width:6,height:6,borderRadius:"50%",background:aiLoading?"#FF9800":orange,
-              animation:aiLoading?"pulse 1s ease-in-out infinite":"none"}}/>
-            <span style={{...mono,fontSize:10,color:"#444"}}>{aiLoading?"thinking...":aiModel}</span>
+          <div style={{display:"flex",alignItems:"center",gap:8}}>
+            <div style={{display:"flex",alignItems:"center",gap:6}}>
+              <div style={{width:6,height:6,borderRadius:"50%",background:aiLoading?"#FF9800":orange,
+                animation:aiLoading?"pulse 1s ease-in-out infinite":"none"}}/>
+              <span style={{...mono,fontSize:10,color:"#444"}}>{aiLoading?"processing...":aiModel}</span>
+            </div>
+            {aiMessages.length > 0 && (
+              <button onClick={newAISession}
+                style={{padding:"4px 10px",background:"none",border:"0.5px solid rgba(255,255,255,0.1)",
+                  borderRadius:6,...mono,fontSize:10,color:"#555",cursor:"pointer"}}
+                onMouseEnter={e=>{e.currentTarget.style.color=orange;e.currentTarget.style.borderColor="rgba(255,87,34,0.3)"}}
+                onMouseLeave={e=>{e.currentTarget.style.color="#555";e.currentTarget.style.borderColor="rgba(255,255,255,0.1)"}}>
+                + New Chat
+              </button>
+            )}
           </div>
         </div>
 
@@ -328,34 +333,62 @@ export default function App() {
 
   useEffect(() => { if (tab==="leaderboard"&&profile) fetchLeaderboard(); }, [tab]);
 
-  // ── AI Chat ────────────────────────────────────────────────────────────────
-  const [aiModel, setAiModel] = useState("SARVAM-M");
+  // ── AI Chat — DB push/pull ─────────────────────────────────────────────────
+  const [aiModel, setAiModel]       = useState("SARVAM-M");
+  const [aiSessionId, setAiSessionId] = useState(() => crypto.randomUUID());
 
   async function sendAI() {
-    if (!aiInput.trim()||aiLoading) return;
-    const context = `[User stats] IdleWorth today: ${currentScore}, Screen time: ${today.screenTimeMinutes}min, Unlocks: ${today.unlockCount}, Level: ${profile?.level}, Monthly avg: ${profile?.monthlyScore}. `;
-    const userMsg = {role:"user", content: context + aiInput.trim()};
-    const newMsgs = [...aiMessages, userMsg];
-    setAiMessages([...newMsgs, {role:"assistant", content:""}]);
-    setAiInput(""); setAiLoading(true);
+    if (!aiInput.trim() || aiLoading) return;
+    const msgText = aiInput.trim();
+    const context = {
+      score      : currentScore,
+      screenTime : today.screenTimeMinutes,
+      unlocks    : today.unlockCount,
+      level      : profile?.level,
+    };
+
+    // Optimistically add user message and empty assistant bubble
+    setAiMessages(m => [
+      ...m,
+      { role:"user",      content: msgText },
+      { role:"assistant", content: "",      status:"processing" },
+    ]);
+    setAiInput("");
+    setAiLoading(true);
+
     try {
-      let full = "";
-      await askAISarvam(newMsgs, aiModel, (chunk) => {
-        full += chunk;
-        setAiMessages(m => {
-          const updated = [...m];
-          updated[updated.length-1] = {role:"assistant", content: full};
-          return updated;
-        });
-      });
-    } catch {
+      // Push to DB → DB calls Sarvam → returns response
+      const result = await pushPromptToDB(
+        profile?.userId, aiSessionId, msgText, aiModel, context
+      );
+
       setAiMessages(m => {
         const updated = [...m];
-        updated[updated.length-1] = {role:"assistant", content:"Connection error. Try again."};
+        updated[updated.length - 1] = {
+          role: "assistant",
+          content: result.response || "No response received.",
+          status: "done",
+        };
         return updated;
       });
+    } catch (err) {
+      setAiMessages(m => {
+        const updated = [...m];
+        updated[updated.length - 1] = {
+          role: "assistant",
+          content: "Connection error. Check your network and try again.",
+          status: "error",
+        };
+        return updated;
+      });
+    } finally {
+      setAiLoading(false);
     }
-    finally { setAiLoading(false); }
+  }
+
+  function newAISession() {
+    setAiSessionId(crypto.randomUUID());
+    setAiMessages([]);
   }
 
   // ── Common styles ──────────────────────────────────────────────────────────
@@ -731,7 +764,7 @@ export default function App() {
   }
 
   // ── Tab: AI CHAT — rendered from outer component (fixes input focus) ────────
-  function TabAI() { return <AIChatTab card={card} mono={mono} orange={orange} isMobile={isMobile} aiMessages={aiMessages} aiInput={aiInput} setAiInput={setAiInput} aiLoading={aiLoading} aiModel={aiModel} setAiModel={setAiModel} sendAI={sendAI} chatEndRef={chatEndRef} profile={profile}/>; }
+  function TabAI() { return <AIChatTab card={card} mono={mono} orange={orange} isMobile={isMobile} aiMessages={aiMessages} aiInput={aiInput} setAiInput={setAiInput} aiLoading={aiLoading} aiModel={aiModel} setAiModel={setAiModel} sendAI={sendAI} chatEndRef={chatEndRef} profile={profile} newAISession={newAISession}/>; }
   // placeholder   // ── Tab: ABOUT ─────────────────────────────────────────────────────────────
   function TabAbout() {
     const RUBRICS = [
